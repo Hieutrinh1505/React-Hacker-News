@@ -1,105 +1,78 @@
-// import logo from './logo.svg';
+import * as React from 'react';
+import axios from 'axios';
+import { sortBy } from 'lodash';
 
-import * as React from "react";
-import axios from "axios";
-// import styles from "./App.module.css";
-import styled from "styled-components";
-import { ReactComponent as Check } from "./yves-guillou-ok.svg";
+const API_BASE = 'https://hn.algolia.com/api/v1';
+const API_SEARCH = '/search';
+const PARAM_SEARCH = 'query=';
+const PARAM_PAGE = 'page=';
 
-const StyledLabel = styled.label`
-  border-top: 1px solid #171212;
-  border-left: 1px solid #171212;
-  padding-left: 5px;
-  font-size: 24px;
-`;
-const StyledInput = styled.input`
-  border: none;
-  border-bottom: 1px solid #171212;
-  background-color: transparent;
-  font-size: 24px;
-`;
+const getUrl = (searchTerm, page) =>
+  `${API_BASE}${API_SEARCH}?${PARAM_SEARCH}${searchTerm}&${PARAM_PAGE}${page}`;
 
-const StyledContainer = styled.div`
-  height: 100vw;
-  padding: 20px;
-  background: #83a4d4;
-  background: linear-gradient(to left, #b6fbff, #83a4d4);
-  color: #171212;
-`;
-const StyledHeadlinePrimary = styled.h1`
-  font-size: 48px;
-  font-weight: 300;
-  letter-spacing: 2px;
-`;
-const StyledItem = styled.li`
-  display: flex;
-  align-items: center;
-  padding-bottom: 5px;
-`;
-const StyledColumn = styled.span`
-  padding: 0 5px;
-  white-space: nowrap;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  a {
-    color: inherit;
-  }
-  width: ${(props) => props.width};
-`;
-const StyledButton = styled.button`
-  background: transparent;
-  border: 1px solid #171212;
-  padding: 5px;
-  cursor: pointer;
-  transition: all 0.1s ease-in;
-  &:hover {
-    fill: #ffffff;
-    stroke: #ffffff;
-  }
-`;
-const StyledButtonSmall = styled(StyledButton)`
-  padding: 5px;
-`;
-const StyledButtonLarge = styled(StyledButton)`
-  padding: 10px;
-`;
-const StyledSearchForm = styled.form`
-  padding: 10px 0 20px 0;
-  display: flex;
-  align-items: baseline;
-`;
-// const getAsyncStories = () =>
-//   new Promise((resolve) =>
-//     setTimeout(() => resolve({ data: { stories: initialStories } }), 2000)
-//   );
-const getSumComments = (stories) => {
-  console.log("C");
-  return stories.data.reduce((result, value) => result + value.num_comments, 0);
+const extractSearchTerm = (url) =>
+  url
+    .substring(url.lastIndexOf('?') + 1, url.lastIndexOf('&'))
+    .replace(PARAM_SEARCH, '');
+
+const getLastSearches = (urls) =>
+  urls
+    .reduce((result, url, index) => {
+      const searchTerm = extractSearchTerm(url);
+
+      if (index === 0) {
+        return result.concat(searchTerm);
+      }
+
+      const previousSearchTerm = result[result.length - 1];
+
+      if (searchTerm === previousSearchTerm) {
+        return result;
+      } else {
+        return result.concat(searchTerm);
+      }
+    }, [])
+    .slice(-6)
+    .slice(0, -1);
+
+const useSemiPersistentState = (key, initialState) => {
+  const [value, setValue] = React.useState(
+    localStorage.getItem(key) || initialState
+  );
+
+  React.useEffect(() => {
+    localStorage.setItem(key, value);
+  }, [value, key]);
+
+  return [value, setValue];
 };
+
 const storiesReducer = (state, action) => {
   switch (action.type) {
-    case "STORIES_FETCH_INIT":
+    case 'STORIES_FETCH_INIT':
       return {
         ...state,
         isLoading: true,
         isError: false,
       };
-    case "STORIES_FETCH_SUCCESS":
-      console.log(state);
+    case 'STORIES_FETCH_SUCCESS':
       return {
         ...state,
         isLoading: false,
         isError: false,
-        data: action.payload,
+        data:
+          action.payload.page === 0
+            ? action.payload.list
+            : state.data.concat(action.payload.list),
+        page: action.payload.page,
       };
-    case "STORIES_FETCH_FAILURE":
+    case 'STORIES_FETCH_FAILURE':
       return {
         ...state,
         isLoading: false,
         isError: true,
       };
-    case "REMOVE_STORY":
+    case 'REMOVE_STORY':
       return {
         ...state,
         data: state.data.filter(
@@ -110,87 +83,131 @@ const storiesReducer = (state, action) => {
       throw new Error();
   }
 };
-const API_ENDPOINT = "https://hn.algolia.com/api/v1/search?query=";
 
 const App = () => {
-  const [searchTerm, setSearchTerm] = React.useState(
-    localStorage.getItem("search") || "React"
+  const [searchTerm, setSearchTerm] = useSemiPersistentState(
+    'search',
+    'React'
   );
-  const [stories, dispatchStories] = React.useReducer(storiesReducer, {
-    data: [],
-    isLoading: false,
-    isError: false,
-  });
 
-  const [url, setUrl] = React.useState(`${API_ENDPOINT}${searchTerm}`);
+  const [urls, setUrls] = React.useState([getUrl(searchTerm, 0)]);
+
+  const [stories, dispatchStories] = React.useReducer(
+    storiesReducer,
+    { data: [], page: 0, isLoading: false, isError: false }
+  );
 
   const handleFetchStories = React.useCallback(async () => {
-    dispatchStories({ type: "STORIES_FETCH_INIT" });
+    dispatchStories({ type: 'STORIES_FETCH_INIT' });
+
     try {
-      const result = await axios.get(url);
+      const lastUrl = urls[urls.length - 1];
+      const result = await axios.get(lastUrl);
+
       dispatchStories({
-        type: "STORIES_FETCH_SUCCESS",
-        payload: result.data.hits,
+        type: 'STORIES_FETCH_SUCCESS',
+        payload: {
+          list: result.data.hits,
+          page: result.data.page,
+        },
       });
     } catch {
-      dispatchStories({ type: "STORIES_FETCH_FAILURE" });
+      dispatchStories({ type: 'STORIES_FETCH_FAILURE' });
     }
-  }, [url]);
+  }, [urls]);
 
   React.useEffect(() => {
     handleFetchStories();
   }, [handleFetchStories]);
-  const handleRemoveStory = React.useCallback((item) => {
-    // const newStories = stories.data.filter(
-    //   (story) => item.objectID !== story.objectID
-    // );
+
+  const handleRemoveStory = (item) => {
     dispatchStories({
-      type: "REMOVE_STORY",
+      type: 'REMOVE_STORY',
       payload: item,
     });
-  }, []);
-
-  React.useEffect(() => {
-    localStorage.setItem("search", searchTerm);
-  }, [searchTerm]);
+  };
 
   const handleSearchInput = (event) => {
     setSearchTerm(event.target.value);
   };
+
   const handleSearchSubmit = (event) => {
-    setUrl(`${API_ENDPOINT}${searchTerm}`);
+    handleSearch(searchTerm, 0);
+
     event.preventDefault();
   };
 
-  // const searchedStories = stories.data.filter((story) =>
-  //   story.title.toLowerCase().includes(searchTerm.toLowerCase())
-  // );
-  console.log("B:App");
-  const sumComments = React.useMemo(() => getSumComments(stories), [stories]);
+  const handleLastSearch = (searchTerm) => {
+    setSearchTerm(searchTerm);
+
+    handleSearch(searchTerm, 0);
+  };
+
+  const handleMore = () => {
+    const lastUrl = urls[urls.length - 1];
+    const searchTerm = extractSearchTerm(lastUrl);
+    handleSearch(searchTerm, stories.page + 1);
+  };
+
+  const handleSearch = (searchTerm, page) => {
+    const url = getUrl(searchTerm, page);
+    setUrls(urls.concat(url));
+  };
+
+  const lastSearches = getLastSearches(urls);
 
   return (
-    <StyledContainer>
-      <StyledHeadlinePrimary>
-        My Hacker Stories with {sumComments} comments
-      </StyledHeadlinePrimary>
+    <div>
+      <h1>My Hacker Stories</h1>
 
       <SearchForm
         searchTerm={searchTerm}
         onSearchInput={handleSearchInput}
         onSearchSubmit={handleSearchSubmit}
       />
+
+      <LastSearches
+        lastSearches={lastSearches}
+        onLastSearch={handleLastSearch}
+      />
+
+      <hr />
+
       {stories.isError && <p>Something went wrong ...</p>}
+
+      <List list={stories.data} onRemoveItem={handleRemoveStory} />
+
       {stories.isLoading ? (
-        <p>Loading</p>
+        <p>Loading ...</p>
       ) : (
-        <List list={stories.data} onRemoveItem={handleRemoveStory} />
+        <button type="button" onClick={handleMore}>
+          More
+        </button>
       )}
-    </StyledContainer>
+    </div>
   );
 };
 
-const SearchForm = ({ searchTerm, onSearchInput, onSearchSubmit }) => (
-  <StyledSearchForm onSubmit={onSearchSubmit}>
+const LastSearches = ({ lastSearches, onLastSearch }) => (
+  <>
+    {lastSearches.map((searchTerm, index) => (
+      <button
+        key={searchTerm + index}
+        type="button"
+        onClick={() => onLastSearch(searchTerm)}
+      >
+        {searchTerm}
+      </button>
+    ))}
+  </>
+);
+
+const SearchForm = ({
+  searchTerm,
+  onSearchInput,
+  onSearchSubmit,
+}) => (
+  <form onSubmit={onSearchSubmit}>
     <InputWithLabel
       id="search"
       value={searchTerm}
@@ -199,65 +216,36 @@ const SearchForm = ({ searchTerm, onSearchInput, onSearchSubmit }) => (
     >
       <strong>Search:</strong>
     </InputWithLabel>
-    <StyledButtonLarge type="submit" disabled={!searchTerm}>
-      Submit
-    </StyledButtonLarge>
-  </StyledSearchForm>
-);
 
-const List = React.memo(
-  ({ list, onRemoveItem }) =>
-    console.log("List") || (
-      <ul>
-        {list.map((item) => (
-          <Item key={item.objectID} item={item} onRemoveItem={onRemoveItem} />
-        ))}
-      </ul>
-    )
-);
-const Item = ({ item, onRemoveItem }) => (
-  <StyledItem>
-    <StyledColumn width="40%">
-      <a href={item.url}>{item.title}</a>
-    </StyledColumn>
-    <StyledColumn width="30%">{item.author}</StyledColumn>
-    <StyledColumn width="10%">{item.num_comments}</StyledColumn>
-    <StyledColumn width="10%">{item.points}</StyledColumn>
-    <StyledColumn width="10%">
-      <StyledButtonSmall
-        type="button"
-        onClick={() => onRemoveItem(item)}
-        // className={`${styles.button} ${styles.buttonSmall}`}
-      >
-        <Check height="18px" width="18px" />
-      </StyledButtonSmall>
-    </StyledColumn>
-  </StyledItem>
+    <button type="submit" disabled={!searchTerm}>
+      Submit
+    </button>
+  </form>
 );
 
 const InputWithLabel = ({
   id,
   value,
-  type = "text",
+  type = 'text',
   onInputChange,
-  children,
   isFocused,
+  children,
 }) => {
   const inputRef = React.useRef();
+
   React.useEffect(() => {
-    console.log(inputRef.current);
     if (isFocused && inputRef.current) {
-      // D
       inputRef.current.focus();
     }
   }, [isFocused]);
+
   return (
     <>
-      <StyledLabel htmlFor={id}>{children}</StyledLabel>
+      <label htmlFor={id}>{children}</label>
       &nbsp;
-      <StyledInput
-        ref={inputRef}
+      <input
         id={id}
+        ref={inputRef}
         type={type}
         value={value}
         onChange={onInputChange}
@@ -265,5 +253,83 @@ const InputWithLabel = ({
     </>
   );
 };
+
+const SORTS = {
+  NONE: (list) => list,
+  TITLE: (list) => sortBy(list, 'title'),
+  AUTHOR: (list) => sortBy(list, 'author'),
+  COMMENT: (list) => sortBy(list, 'num_comments').reverse(),
+  POINT: (list) => sortBy(list, 'points').reverse(),
+};
+
+const List = ({ list, onRemoveItem }) => {
+  const [sort, setSort] = React.useState({
+    sortKey: 'NONE',
+    isReverse: false,
+  });
+
+  const handleSort = (sortKey) => {
+    const isReverse = sort.sortKey === sortKey && !sort.isReverse;
+
+    setSort({ sortKey, isReverse });
+  };
+
+  const sortFunction = SORTS[sort.sortKey];
+  const sortedList = sort.isReverse
+    ? sortFunction(list).reverse()
+    : sortFunction(list);
+
+  return (
+    <ul>
+      <li style={{ display: 'flex' }}>
+        <span style={{ width: '40%' }}>
+          <button type="button" onClick={() => handleSort('TITLE')}>
+            Title
+          </button>
+        </span>
+        <span style={{ width: '30%' }}>
+          <button type="button" onClick={() => handleSort('AUTHOR')}>
+            Author
+          </button>
+        </span>
+        <span style={{ width: '10%' }}>
+          <button type="button" onClick={() => handleSort('COMMENT')}>
+            Comments
+          </button>
+        </span>
+        <span style={{ width: '10%' }}>
+          <button type="button" onClick={() => handleSort('POINT')}>
+            Points
+          </button>
+        </span>
+        <span style={{ width: '10%' }}>Actions</span>
+      </li>
+
+      {sortedList.map((item) => (
+        <Item
+          key={item.objectID}
+          item={item}
+          onRemoveItem={onRemoveItem}
+        />
+      ))}
+    </ul>
+  );
+};
+
+const Item = ({ item, onRemoveItem }) => (
+  <li style={{ display: 'flex' }}>
+    <span style={{ width: '40%' }}>
+      <a href={item.url}>{item.title}</a>
+    </span>
+    <span style={{ width: '30%' }}>{item.author}</span>
+    <span style={{ width: '10%' }}>{item.num_comments}</span>
+    <span style={{ width: '10%' }}>{item.points}</span>
+    <span style={{ width: '10%' }}>
+      <button type="button" onClick={() => onRemoveItem(item)}>
+        Dismiss
+      </button>
+    </span>
+  </li>
+);
 
 export default App;
